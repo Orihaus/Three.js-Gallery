@@ -1,0 +1,446 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Map of Paradise</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				background-color: #080808;
+				margin: 0px;
+				overflow: hidden;
+			}
+
+			a {
+				color:#bbbbbb;
+			}
+		</style>
+	</head>
+	<body>
+
+		<script src="inc/three.js"></script>
+
+		<script>
+            var rawResponse;
+            var paradiseVesselsRaw = {};
+            var paradiseVessels = new Array();
+            var paradiseSize = 0;
+			var paradiseRawSize = 0;
+			var paradiseIndexSize = 0;
+			var paradiseLowestIndex = 9999;
+
+			function recursiveParse( vessel, level )
+			{
+			    if( vessel && paradiseSize < 200 )
+			    {
+			        vessel.level = level;
+			        paradiseVessels.push(vessel);
+			        paradiseSize++;
+			    }
+
+			    if (vessel.children)
+			    {
+			        $.each(vessel.children, function (index, value) {
+			            value.childID = index;
+			            recursiveParse(value, level + 1);
+			        });
+			    }
+			}
+
+			function completedLoading()
+			{
+			    console.log(paradiseLowestIndex);
+
+			    for( var i = 0; i < paradiseIndexSize; i++ )
+			    {
+			        if (paradiseVesselsRaw[i])
+			        {
+			            var parentIndex = paradiseVesselsRaw[i].parent;
+			            paradiseVesselsRaw[i].childID = 0;
+
+			            if (paradiseVesselsRaw[parentIndex])
+			            {
+			                if (!paradiseVesselsRaw[parentIndex].children)
+			                    paradiseVesselsRaw[parentIndex].children = new Array();
+			                paradiseVesselsRaw[parentIndex].children.push(paradiseVesselsRaw[i]);
+			                paradiseVesselsRaw[i].childID = paradiseVesselsRaw[parentIndex].children.length - 1;
+			            }
+			        }
+			    }
+
+			    /*for (var i = 0; i < paradiseIndexSize; i++)
+			    {
+			        if (paradiseVesselsRaw[i] && paradiseSize < 20)
+			        {
+			            paradiseVessels.push(paradiseVesselsRaw[i]);
+			            paradiseSize++;
+			        }
+			    }*/
+
+			    recursiveParse(paradiseVesselsRaw[291], 0);
+
+			    paradiseSize = paradiseVessels.length;
+
+				initGL();
+				animate();
+				fixedStep();
+			}
+
+		</script>
+		<script src="inc/stats.min.js"></script>
+		<script src="inc/jquery.min.js"></script>
+		<script src="jquery.main.js"></script>
+
+		<script>
+
+			var SCREEN_WIDTH = window.innerWidth,
+			SCREEN_HEIGHT = window.innerHeight,
+
+			mouseX = 0, mouseY = 0, mouseZ = 0,
+
+			windowHalfX = window.innerWidth / 2,
+			windowHalfY = window.innerHeight / 2,
+
+			 planePositions, planeColors,
+
+			SEPARATION = 200,
+			AMOUNTX = 10,
+			AMOUNTY = 10,
+
+			vesselPositions = {},
+			currentPosition = new THREE.Vector3( 0.0, 0.0, 0.0 ),
+
+			stats,
+
+			lineMesh,
+
+			camera, scene, renderer;
+
+			//init();
+			//animate();
+
+			function initText( name,  vertex, id )
+			{
+				planePositions[ id * 3  ]     = vertex.x;
+				planePositions[ id * 3  + 1 ] = vertex.y;
+				planePositions[ id * 3  + 2 ] = vertex.z;
+			}
+
+			function findNode(id)
+			{
+				console.log("Looking for: " + id);
+				currentPosition = vesselPositions[id];
+			}
+
+			function initGL() 
+			{
+				console.log("Initalizng with " + paradiseSize + " vessels.");
+				var container, separation = 100, amountX = 50, amountY = 50,
+				particles, particle;
+
+				container = document.createElement('a');
+				document.body.appendChild(container);
+
+				camera = new THREE.PerspectiveCamera( 75, SCREEN_WIDTH / SCREEN_HEIGHT, 1, 100000 );
+				camera.position.z = 1000;
+
+				scene = new THREE.Scene();
+
+				renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
+				renderer.setSize( SCREEN_WIDTH, SCREEN_HEIGHT );
+				container.appendChild( renderer.domElement );
+
+				// particles
+
+				var PI2 = Math.PI * 2;
+
+				var material = new THREE.SpriteMaterial({
+				    transparent: false,
+				    useScreenCoordinates: false,
+				    color: 0x888888
+				});
+				for ( var i = 0; i < 1000; i ++ ) {
+
+					var particle = new THREE.Sprite( material );
+					particle.position.x = Math.random() * 2 - 1;
+					particle.position.y = Math.random() * 2 - 1;
+					particle.position.z = Math.random() * 2 - 1;
+					particle.position.normalize();
+					particle.position.multiplyScalar( Math.random() * 10 + 450 );
+				//	scene.add( particle );
+
+				}
+
+				// lines
+				var segments = paradiseSize;
+				var lineGeo = new THREE.BufferGeometry();
+				var lineMat = new THREE.LineBasicMaterial( { color: 0x888888, vertexColors: true } );
+
+				lineGeo.addAttribute( 'position', Float32Array, segments * 2, 3 );
+				lineGeo.addAttribute( 'color', Float32Array, segments * 2, 4 );
+
+				var linePositions = lineGeo.attributes.position.array;
+				var lineColors = lineGeo.attributes.color.array;
+
+				var planeGeo = new THREE.BufferGeometry();
+				planeGeo.addAttribute( 'position', Float32Array, segments, 3 );
+				planeGeo.addAttribute( 'color', Float32Array, segments, 4 );
+
+				planePositions = planeGeo.attributes.position.array;
+				planeColors = planeGeo.attributes.color.array;
+
+				var indexVec = 0;
+				//var planeIndex = 0;
+				var vesselID = 0;
+				var subBranch = false;
+				var vertex = new THREE.Vector3( 0, 0, 0 );
+
+				for( var i = 0; i < segments * 2; i ++ ) 
+				{
+					 if( indexVec == 0 && paradiseVessels[vesselID].level == 1  )
+					{
+						vertex = new THREE.Vector3( Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1);
+						vertex.normalize();
+						vertex.multiplyScalar( 300 );
+						//vesselPositions[paradiseVessels[vesselID].id] = new THREE.Vector3( vertex.x, vertex.y, vertex.z );
+					}
+					else
+					{
+						if( indexVec == 0 && paradiseVessels[vesselID].level > 1 )
+						{
+							console.log( "Found Parent, ID: "  + paradiseVessels[vesselID].parent );
+							vertex = new THREE.Vector3( vesselPositions[paradiseVessels[vesselID].parent].x
+								, vesselPositions[paradiseVessels[vesselID].parent].y
+								, vesselPositions[paradiseVessels[vesselID].parent].z );
+
+							//vertex.multiplyScalar( 150 * ( ( 0.25 * paradiseVessels[vesselID].level ) + 1.0 ) );
+							subBranch = !subBranch;
+						}
+					}
+
+					if( indexVec == 1 )
+					{
+						if( subBranch )
+						{
+							var length = vertex.length();
+							vertex.normalize();
+
+							var axis = new THREE.Vector3( 0, 1, 0 );
+							var angle = ( Math.PI / 25 ) * ( paradiseVessels[vesselID].childID * 2 - 1 );
+							var matrix = new THREE.Matrix4().makeRotationAxis( axis, angle );
+							vertex.applyMatrix4( matrix );
+							vertex.normalize();
+
+							vertex.multiplyScalar( length );
+						}
+
+						vertex.multiplyScalar( 1.5 );
+
+						vesselPositions[paradiseVessels[vesselID].id] = new THREE.Vector3( vertex.x, vertex.y, vertex.z );
+						console.log( "Branching. I am the " + paradiseVessels[vesselID].childID + "th child")
+					}
+
+				    linePositions[ i * 3  ]     = vertex.x;
+					linePositions[ i * 3  + 1 ] = vertex.y;
+					linePositions[ i * 3  + 2 ] = vertex.z;
+
+					var LineBrightness = .325;//0.5 - paradiseVessels[vesselID].level * 0.5;
+
+					lineColors[ i * 4 ] = LineBrightness;
+					lineColors[ i * 4 + 1 ] = LineBrightness;
+					lineColors[ i * 4 + 2 ] = LineBrightness;
+					lineColors[ i * 4 + 3 ] = LineBrightness;
+
+					if( indexVec == 1 )
+					{
+						console.log( paradiseVessels[vesselID] );
+
+						initText( "Paradise", vertex, vesselID )
+
+						vesselID++;
+					}
+
+				    indexVec++;
+				    if( indexVec == 2 )
+				    {
+					 	parentFound = false;
+				    	indexVec = 0;
+				    	var vertex = new THREE.Vector3( 0.0, 0.0, 0.0 );
+				    }
+				}
+
+				lineGeo.computeBoundingSphere();
+
+				lineMesh = new THREE.Line( lineGeo, lineMat, THREE.LinePieces );
+				scene.add( lineMesh );
+
+				planeGeo.computeBoundingSphere();
+
+				var planeMaterial = new THREE.ParticleBasicMaterial( { size: 34, color: 0x888888 } );
+				var planeParticles = new THREE.ParticleSystem( planeGeo, planeMaterial );
+				//scene.add( planeParticles );
+
+				stats = new Stats();
+				stats.domElement.style.position = 'absolute';
+				stats.domElement.style.top = '0px';
+				container.appendChild( stats.domElement );
+
+				document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+				document.addEventListener( 'touchstart', onDocumentTouchStart, false );
+				document.addEventListener( 'touchmove', onDocumentTouchMove, false );
+				document.body.addEventListener( 'mousewheel', onDocumentMouseWheel, false );
+				document.body.addEventListener( 'DOMMouseScroll', onDocumentMouseWheel, false ); // firefox
+
+				for (var i = 0; i < paradiseVessels.length; i++) {
+					drawTextLabel(i, paradiseVessels[i].id);
+				};
+				window.addEventListener( 'resize', onWindowResize, false );
+
+			}
+
+			function toXYCoords (pos) 
+			{
+				var widthHalf = window.innerWidth / 2, heightHalf = window.innerHeight / 2;
+				var	projector = new THREE.Projector();
+		        var vector = projector.projectVector(pos.clone(), camera);
+		        //vector.x = ( vector.x * widthHalf ) + widthHalf;
+		    	//vector.y = -( vector.y * heightHalf ) + heightHalf;
+
+		        vector.y = heightHalf - heightHalf * vector.y;
+		        vector.x = widthHalf * vector.x + widthHalf;
+
+		        return vector;
+			}
+
+		  	function Label(id, vesselId) 
+		  	{
+			    this.id = id;
+			    this.vesselId = vesselId;
+
+			    this.text2 = this.buildElement();
+			    this.track();
+		 	}
+			Label.prototype.buildElement = function() {
+
+				var text2 = document.createElement('a');
+				text2.style.position = 'absolute';
+				text2.style.color = 0x888888;
+				text2.setAttribute('data-vesselId',this.vesselId);
+				text2.onclick = function(e) { findNode(e.target.getAttribute('data-vesselId')); };
+				//text2.style.padding = '1px 4px';
+				//text2.style.borderRadius = '2px';
+				text2.style.overflowY = 'auto';
+				var name = paradiseVessels[this.id].name;
+				name = name.charAt(0).toUpperCase() + name.slice(1);
+				text2.innerHTML = name;
+				document.body.appendChild(text2);
+				return text2;
+			};
+
+			Label.prototype.track = function() {
+				var pos = new THREE.Vector3( planePositions[ this.id * 3], planePositions[ this.id * 3 + 1], planePositions[ this.id * 3 + 2] );
+				var coord = toXYCoords( pos );
+				this.text2.style.top = ( coord.y - 12 ) + 'px';
+				this.text2.style.left = ( coord.x + 6 ) + 'px';
+				this.text2.style.size = 42 + 'px';
+				this.text2.style.color = 0x888888;
+				var that = this;
+				setTimeout(function(){that.track();}, 1000/60);
+			};
+
+			function drawTextLabel( id, vesselId )
+			{
+				new Label(id, vesselId);
+			}
+
+			function onWindowResize() {
+
+				windowHalfX = window.innerWidth / 2;
+				windowHalfY = window.innerHeight / 2;
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			//
+
+			function onDocumentMouseWheel(event)
+			{
+				mouseZ += event.wheelDelta;
+			}
+
+			function onDocumentMouseMove(event) {
+
+				mouseX = event.clientX - windowHalfX;
+				mouseY = event.clientY - windowHalfY;
+			}
+
+			function onDocumentTouchStart( event ) {
+
+				if ( event.touches.length > 1 ) {
+
+					event.preventDefault();
+
+					mouseX = event.touches[ 0 ].pageX - windowHalfX;
+					mouseY = event.touches[ 0 ].pageY - windowHalfY;
+
+				}
+
+			}
+
+			function onDocumentTouchMove( event ) {
+
+				if ( event.touches.length == 1 ) {
+
+					event.preventDefault();
+
+					mouseX = event.touches[ 0 ].pageX - windowHalfX;
+					mouseY = event.touches[ 0 ].pageY - windowHalfY;
+
+				}
+
+			}
+
+
+			var f = 0;
+			function fixedStep()
+			{
+			   // camera.position.x = 250 * Math.cos(f + mouseY * 0.01);
+			   // camera.position.y = 1550 + Math.sin(f + mouseY * 0.01) * 50;
+			   // camera.position.z = 520 + Math.sin(f + mouseX * 0.01) * 200;
+
+			   camera.position.x += ( mouseX - camera.position.x ) * .85;
+			   camera.position.y += (-mouseY + 200 - camera.position.y) * .85;
+			   camera.position.z += (mouseZ + 1000 - camera.position.z) * .85;
+
+			    camera.lookAt(currentPosition);
+
+			    //console.log("s");
+
+			    f += 0.01;
+
+			    setTimeout(fixedStep, 1000 / 60);
+			}
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+
+				render();
+				stats.update();
+
+			}
+			
+			function render() 
+			{
+
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+	</body>
+</html>

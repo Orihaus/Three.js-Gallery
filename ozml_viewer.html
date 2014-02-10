@@ -1,0 +1,188 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - geometry - large mesh</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+            body {
+                background: #181818;
+                color: #fff;
+                padding: 0;
+                margin: 0;
+                overflow: hidden;
+                font-family: georgia;
+                text-align: center;
+            }
+			h1 { }
+			a { color:skyblue }
+			canvas { pointer-events:none; z-index:10; }
+			#log { position:absolute; top:50px; text-align:left; display:block; z-index:100 }
+			#d { text-align:center; margin:1em 0 -18em 0; z-index:0; position:relative; display:block }
+			.button { background:orange; color:#fff; padding:0.2em 0.5em; cursor:pointer }
+			.inactive { background:#999; color:#eee }
+		</style>
+	</head>
+
+	<body>
+
+		<pre id="log"></pre>
+
+        <script src="inc/three.js"></script>
+		<script src="inc/OBJLoader.js"></script>
+        <script src="inc/stats.min.js"></script>
+        <script src="inc/OZMLParser.js"></script>
+        <script src="inc/FirstPersonControls.js"></script>
+        <script src="inc/BufferGeometryUtils.js"></script>
+
+		<script>
+
+			var SCREEN_WIDTH = window.innerWidth;
+			var SCREEN_HEIGHT = window.innerHeight;
+
+			var clock = new THREE.Clock();
+			var container, stats, controls;
+			var camera, scene, canvasRenderer, webglRenderer;
+			var loader, objectLoader;
+			var mesh, zmesh, lightMesh;
+			var directionalLight, pointLight1, pointLight2;
+
+			var mouseX = 0, mouseY = 0;
+			var windowHalfX = window.innerWidth / 2;
+			var windowHalfY = window.innerHeight / 2;
+
+			var ozml;
+
+			document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+
+			init();
+			animate();
+			fixedStep();
+
+			function init() 
+			{
+			    container = document.createElement( 'div' );
+			    document.body.appendChild( container );
+
+			    scene = new THREE.Scene();
+
+			    camera = new THREE.PerspectiveCamera(60, SCREEN_WIDTH / SCREEN_HEIGHT, 1, 100000);
+			   // camera.position.x = 50;
+			    // camera.position.z = 500;
+
+			    controls = new THREE.FirstPersonControls(camera);
+			    controls.movementSpeed = 25;
+			    controls.lookSpeed = 0.1;
+
+			    // LIGHTS
+			    var ambient = new THREE.AmbientLight( 0x888888 );
+			    scene.add( ambient );
+
+			    directionalLight = new THREE.DirectionalLight( 0xffffff, 0.6 );
+			    directionalLight.position.set( 600, 1450, 200 );
+			    directionalLight.castShadow = true;
+			    //directionalLight.shadowCameraVisible = true;
+
+				directionalLight.shadowCameraNear = 100;
+				directionalLight.shadowCameraFar = 2250;
+				directionalLight.shadowCameraTop = 750;
+				directionalLight.shadowCameraBottom = -750;
+
+				directionalLight.shadowCameraFov = 50;
+				directionalLight.shadowBias = 0.0001;
+				directionalLight.shadowDarkness = 1.0;
+				directionalLight.shadowMapWidth = 1024;
+				directionalLight.shadowMapHeight = 1024;
+
+			    scene.add(directionalLight);
+
+			    try 
+			    {
+			        webglRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, precision: "highp" });
+			        webglRenderer.gammaOutput = true;
+			        webglRenderer.setSize( SCREEN_WIDTH, SCREEN_HEIGHT );
+			        webglRenderer.domElement.style.position = "relative";
+
+				    webglRenderer.shadowMapEnabled = true;
+					webglRenderer.shadowMapSoft = true;
+					webglRenderer.shadowMapType = THREE.PCFSoftShadowMap ;
+
+					webglRenderer.shadowCameraNear = 3;
+					webglRenderer.shadowCameraFar = camera.far;
+					webglRenderer.shadowCameraFov = 50;
+
+					webglRenderer.shadowMapBias = 0.0039;
+					webglRenderer.shadowMapDarkness = 0.5;
+					webglRenderer.shadowMapWidth = 2048;
+					webglRenderer.shadowMapHeight = 2048;		
+						        
+			        container.appendChild( webglRenderer.domElement );
+			    }
+			    catch (e) 
+			    {
+			    }
+
+			   /* stats = new Stats();
+			    stats.domElement.style.position = 'absolute';
+			    stats.domElement.style.top = '0px';
+			    stats.domElement.style.zIndex = 100;
+			    container.appendChild( stats.domElement );*/
+
+			    var start = Date.now();
+
+
+			    var baseMaterial = new THREE.MeshLambertMaterial({color: 0x555555});
+
+				ozml = new THREE.OZMLParser("pi_mar.xml", scene, baseMaterial);
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+			}
+
+			function onWindowResize() 
+			{
+				windowHalfX = window.innerWidth / 2;
+				windowHalfY = window.innerHeight / 2;
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				webglRenderer.setSize( window.innerWidth, window.innerHeight );
+			}
+
+			function onDocumentMouseMove( event ) 
+			{
+				mouseX = ( event.clientX - windowHalfX );
+				mouseY = ( event.clientY - windowHalfY );
+			}
+
+			function animate() 
+			{
+			    requestAnimationFrame( animate);
+			    //setInterval(animate, 25);
+
+				render();
+				//stats.update();
+			}
+
+
+			function render()
+			{
+				webglRenderer.render( scene, camera );
+			}
+
+			function fixedStep()
+			{
+			    controls.update(clock.getDelta());
+
+			    setTimeout(fixedStep, 1000 / 60);
+			}
+
+			function log( text ) 
+			{
+				var e = document.getElementById( "log" );
+				e.innerHTML = text + "<br/>" + e.innerHTML;
+			}
+		</script>
+	</body>
+</html>
