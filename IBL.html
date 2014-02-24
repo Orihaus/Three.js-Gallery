@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Advanced IBL Laboratory</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				background-color: #000000;
+				margin: 0px;
+				overflow: hidden;
+			}
+
+			#info {
+				position: absolute;
+				top: 0px; width: 100%;
+				color: #ffffff;
+				padding: 5px;
+				font-family:Monospace;
+				font-size:13px;
+				font-weight: bold;
+				text-align:center;
+			}
+
+			a {
+				color: #ffffff;
+			}
+		</style>
+	</head>
+	<body>
+
+		<div id="container"></div>
+
+		<script src="inc/three.js"></script>
+        <script type="text/javascript" src="inc/dat.gui.min.js"></script>
+
+        <script id="vertexShader" type="x-shader/x-vertex">
+            attribute vec4 tangent;
+            uniform vec3 ambientLightColor;
+
+            #if MAX_POINT_LIGHTS > 0
+                uniform vec3 pointLightPosition[ MAX_POINT_LIGHTS ];
+                varying vec4 vPointLight[ MAX_POINT_LIGHTS ];
+            #endif
+
+			#ifdef USE_SHADOWMAP
+				varying vec4 vShadowCoord[ MAX_SHADOWS ];
+				uniform mat4 shadowMatrix[ MAX_SHADOWS ];
+			#endif
+
+            varying vec3 vNormal;
+            varying vec3 vViewPosition;
+            varying vec2 vUv;
+
+            varying vec3 vWorldPosition;
+            varying vec3 vTangent;
+            varying vec3 vBinormal;
+            varying vec3 vWorldNormal;
+
+            void main()	
+            {
+                vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+                vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+                vWorldPosition = worldPosition.xyz;
+
+           	 	vNormal = normalize( normalMatrix * normal );
+           	 	vWorldNormal = normalize( mat3( modelMatrix[ 0 ].xyz, modelMatrix[ 1 ].xyz, modelMatrix[ 2 ].xyz ) * normal );
+                vViewPosition = -mvPosition.xyz;
+                gl_Position = projectionMatrix * mvPosition;
+
+				#ifdef USE_SHADOWMAP
+					for( int i = 0; i < MAX_SHADOWS; i ++ ) 
+					{
+						vShadowCoord[ i ] = shadowMatrix[ i ] * ( modelMatrix * vec4( mappedPosition, 1.0 ) );
+					}
+				#endif
+            }
+        </script>
+
+        <script id="fragmentShader" type="x-shader/x-fragment">
+            #extension GL_OES_standard_derivatives : enable
+
+            uniform vec2 resolution;
+            uniform float time;
+            uniform vec3 ambientLightColor;
+            uniform float roughnessScale;
+            uniform float diffuseScale;
+            uniform float iorScale;
+
+            #if MAX_DIR_LIGHTS > 0
+                uniform vec3 directionalLightColor[ MAX_DIR_LIGHTS ];
+                uniform vec3 directionalLightDirection[ MAX_DIR_LIGHTS ];
+            #endif
+
+            #if MAX_POINT_LIGHTS > 0
+                uniform vec3 pointLightPosition[ MAX_POINT_LIGHTS ];
+                uniform vec3 pointLightColor[ MAX_POINT_LIGHTS ];
+                varying vec4 vPointLight[ MAX_POINT_LIGHTS ];
+            #endif
+
+            uniform samplerCube diffuseAmbientCube;
+			uniform samplerCube lightDirectionCube;
+
+			uniform samplerCube glossLowReflectionCube;
+            uniform samplerCube glossMidReflectionCube;
+            uniform samplerCube glossHighReflectionCube;
+
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            varying vec3 vViewPosition;
+            varying vec3 vWorldPosition;
+            varying vec3 vWorldNormal;
+
+            varying vec3 vTangent;
+            varying vec3 vBinormal;
+
+            #define saturate( value ) clamp( value, 0.0, 1.0 )
+            #define lerp( x, y, a ) mix( x, y, a )
+            #define Pi 3.14159
+            #define OneOverPi 0.318310
+            #define sqr(x) pow( x, 2.0 )
+            #define lumcoeff vec3( 0.299, 0.587, 0.114 )
+
+            float CalculateGGX( float roughness, float cosThetaM )
+            {
+			    float CosSquared = cosThetaM * cosThetaM;
+                float alpha = roughness * roughness;
+                float GGX = CosSquared * ( alpha - 1.0 ) + 1.0;
+                return ( alpha ) / ( Pi * GGX * GGX );
+            }
+
+            float CalculateGeometric( float n_dot_x, float roughness )
+            {
+                return n_dot_x / ( n_dot_x * ( 1.0 - roughness ) + roughness );
+            }
+
+            float CalculateGeometricAtten( float n_dot_l, float n_dot_v, float roughness )
+            {
+                float roughnessRemap = roughness * 0.5; 
+                float atten = CalculateGeometric( n_dot_v, roughnessRemap ) * CalculateGeometric( n_dot_l, roughnessRemap );
+                return atten;
+            }
+
+			float Fresnel( float x, float y, float z )
+			{
+				return x + ( z - x ) * pow( 1.0 - y, 5.0 );
+			}
+
+            /*float CalculateLambert( float h_dot_d, float n_dot_v, float n_dot_l, float roughness )
+            {
+          		float frk = 0.5 + 2.0 * h_dot_d * h_dot_d * roughness;        
+    			return Fresnel( 1.0, n_dot_v, frk ) * Fresnel( 1.0, n_dot_l, frk );
+            }*/
+
+            vec3 CalculatePBRLighting( vec3 diffuse, float scattering, float roughness, float SRNI, float specular, vec3 normal, float n_dot_v, vec3 lightDirection, vec3 viewPosition, float n_dot_l )
+            {
+                if( n_dot_l <= 0.0 )
+                    return vec3( 0.0 );
+
+            	diffuse *= 0.625;
+                vec3 halfVector = normalize( lightDirection + viewPosition );
+
+                float h_dot_n = saturate( dot(    halfVector, normal ) );
+                float h_dot_v = max( dot(    halfVector, viewPosition ), 0.0 );
+                float h_dot_d = dot( lightDirection, halfVector );
+
+                float fresnel = Fresnel( SRNI, h_dot_v, 1.0 );
+
+                float distribution = CalculateGGX( roughness, h_dot_n );
+                float geometricAttenuation = CalculateGeometricAtten( n_dot_l, h_dot_v, roughness );
+                float specFinal = max( distribution * fresnel * geometricAttenuation * saturate( 1.0 / ( 4.0 * n_dot_l * n_dot_v ) ), 0.0 ) * specular;
+
+                vec3 lambert = OneOverPi * diffuse;// * max( CalculateLambert( h_dot_d, n_dot_v, n_dot_l, 1.0 - roughness ), 0.0 );
+                return n_dot_l * ( lambert + specFinal ) * 3.0;
+            }
+
+            float SampleCubeLuminance( samplerCube cube, vec3 position )
+            {
+                vec3 sample = textureCube( cube, vec3( -position.x, position.yz ) ).rgb;
+                return dot( lumcoeff, sample );
+            }
+
+            vec3 CalculateLightNormal( samplerCube cube, in vec3 pos )
+            {
+                const vec3 eps = vec3( 0.5, 0.0, 0.0 ) ;
+                return normalize( vec3(
+                       SampleCubeLuminance( cube, pos + eps.xyy ) - SampleCubeLuminance( cube, pos - eps.xyy ),
+                       SampleCubeLuminance( cube, pos + eps.yxy ) - SampleCubeLuminance( cube, pos - eps.yxy ),
+                       SampleCubeLuminance( cube, pos + eps.yyx ) - SampleCubeLuminance( cube, pos - eps.yyx ) ) );
+            }
+
+            vec3 CalculateIBL( vec3 diffuse, float scattering, float roughness, float SRNI, float specular, vec3 normal, vec3 viewDirection, vec3 reflectionVector, float  n_dot_v )
+            {
+            	vec3 ambientDiffuse       = textureCube( diffuseAmbientCube, vec3( -vWorldNormal.x,     vWorldNormal.yz ) ).rgb;
+            	vec3 diffuseReflection    = textureCube( diffuseAmbientCube, vec3( -reflectionVector.x, reflectionVector.yz ) ).rgb;
+
+                vec3 correctedReflection     = vec3( -reflectionVector.x, reflectionVector.yz );
+            	vec3 glossLowReflection      = textureCube( glossLowReflectionCube, correctedReflection ).rgb;
+                vec3 glossMidReflection      = textureCube( glossMidReflectionCube, correctedReflection ).rgb;
+                vec3 glossHighReflection     = textureCube( glossHighReflectionCube,correctedReflection ).rgb;
+
+                vec3 finalReflection = lerp( glossLowReflection, glossMidReflection,  saturate( roughness * 1.5 ) );
+            	finalReflection      = lerp( finalReflection,    glossHighReflection, saturate( roughness - 0.666 ) * 3.0 );
+
+            	float irradianceLuminance = dot( lumcoeff, ambientDiffuse );
+                float irradianceReflectionLuminance = dot( lumcoeff, diffuseReflection );
+
+                float fresnel = Fresnel( SRNI, n_dot_v, 1.0 );
+            	return ( diffuse * OneOverPi * ambientDiffuse ) + ( specular * fresnel * finalReflection );
+           	}
+            void main()	
+            {
+                float roughness = roughnessScale;
+                vec3 diffuse = vec3( diffuseScale );
+                float scattering = 0.05;
+                float ior = iorScale;
+                float SRNI = pow( ( 1.0 - ior ) / ( 1.0 + ior ), 2.0 );
+                float specular = 1.25;
+
+                vec3 normal = normalize( vNormal );
+                vec3 viewPosition = normalize( vViewPosition );
+
+				vec3 cameraToVertex = normalize( vWorldPosition - cameraPosition );
+				vec3 reflectVec = reflect( cameraToVertex, vWorldNormal );
+
+                float n_dot_v = dot( normal, viewPosition );
+                roughness *= 0.5 + saturate( 0.5 - ( 0.5 + n_dot_v * 0.5 ) * 0.5 );
+                n_dot_v = saturate( n_dot_v );
+
+                // PBR Lighting
+                vec3 lightAccumulation = CalculateIBL( diffuse, scattering, roughness, SRNI, specular, normal, viewPosition, reflectVec, n_dot_v );
+
+                #if MAX_DIR_LIGHTS > 0
+                    for( int i = 0; i < MAX_DIR_LIGHTS; i++ ) 
+                    {
+                        vec4 lDirection = viewMatrix * vec4( directionalLightDirection[ i ], 0.0 );
+                        vec3 dirVector = normalize( lDirection.xyz );
+
+						float n_dot_l = dot( dirVector, normal );
+                        lightAccumulation += directionalLightColor[i].xyz * CalculatePBRLighting( diffuse, scattering, roughness, SRNI, specular, normal, n_dot_v, dirVector, viewPosition, n_dot_l ) * shadowTerm;
+                    }
+                #endif
+
+                #if MAX_POINT_LIGHTS > 0
+                    for( int i = 0; i < MAX_POINT_LIGHTS; i ++ ) 
+                    {
+
+                    	vec3 pointVector = ( viewMatrix * vec4( pointLightPosition[ i ], 1.0 ) ).xyz + vViewPosition.xyz;
+                        vec3 pointDirection = normalize( pointVector );
+                        float pointDistance = length( pointVector ) * 0.00333;
+
+                        float falloff = saturate( 1.0 - pow( pointDistance / 1.0, 4.0 ) );
+                        falloff *= falloff;
+                        falloff /= ( pointDistance * pointDistance ) + 1.0;
+ 
+ 						float n_dot_l = dot( pointDirection, normal );
+                        lightAccumulation += pointLightColor[i].xyz * CalculatePBRLighting( diffuse, scattering, roughness, SRNI, specular,
+                        	normal, n_dot_v, pointDirection, viewPosition, n_dot_l ) * falloff;
+                    }
+                #endif
+
+                gl_FragColor = vec4( lightAccumulation, 1.0 );
+			}
+        </script>
+
+		<script>
+			var camera, scene, renderer;
+
+			var texture_placeholder,
+			isUserInteracting = false,
+			onMouseDownMouseX = 0, onMouseDownMouseY = 0,
+			lon = 0, onMouseDownLon = 0,
+			lat = 0, onMouseDownLat = 0,
+			phi = 0, theta = 0;
+            var numSpheres = 100;
+
+            var sphereMeshes = [];
+			var directionalLight, pointLight1, pointLight2;
+
+            var Settings = function() 
+            {
+                this.Roughness = 0.6;
+                this.RefractiveIndex = 1.5;
+                this.Diffusion = 0.125;
+            }
+            var settings = new Settings();          
+
+			init();
+			animate();
+
+			function addMeshToScene( geometry, scale, x, y, z, rx, ry, rz, material ) 
+			{
+				mesh = new THREE.Mesh( geometry, material );
+				mesh.scale.set( scale, scale, scale );
+				mesh.position.set( x, y, z );
+				mesh.rotation.set(rx, ry, rz);
+
+				scene.add( mesh );
+			}
+
+			function addObjectToScene( object, scale, x, y, z, rx, ry, rz, material ) 
+			{
+				object.traverse( function ( child ) 
+				{
+					if ( child instanceof THREE.Mesh )
+					{
+						addMeshToScene( child.geometry, scale, x, y, z, rx, ry, rz, material );
+					}
+				} );
+			}
+
+			function LoadCube( src )
+			{
+				var format = '.jpg';
+				var urls = [
+						src + 'c00' + format, src + 'c01' + format,
+						src + 'c02' + format, src + 'c03' + format,
+						src + 'c04' + format, src + 'c05' + format
+					];
+
+				var reflectionCube = THREE.ImageUtils.loadTextureCube( urls );
+				reflectionCube.format = THREE.RGBFormat;
+				return reflectionCube;
+			}
+
+			function init() {
+
+				var container, mesh;
+
+                container = document.createElement( 'div' );
+                document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 1, 1100 );
+				camera.target = new THREE.Vector3( 0, 0, 0 );
+
+				scene = new THREE.Scene();
+
+                var diffuseAmbientCube = LoadCube( "data/IBL/Grace/Irradiance/" );
+                var glossLowReflectionCube = LoadCube( "data/IBL/Grace/LowGloss/" );
+                var glossMidReflectionCube = LoadCube( "data/IBL/Grace/MidGloss/" );
+                var glossHighReflectionCube = LoadCube( "data/IBL/Grace/HighGloss/" );                                
+
+				// Skybox
+				var shader = THREE.ShaderLib[ "cube" ];
+				shader.uniforms[ "tCube" ].value = LoadCube( "data/IBL/Grace/LowGloss/" );
+				var material = new THREE.ShaderMaterial( 
+				{
+					fragmentShader: shader.fragmentShader,
+					vertexShader: shader.vertexShader,
+					uniforms: shader.uniforms,
+					depthWrite: false,
+					side: THREE.BackSide
+				} ),
+				mesh = new THREE.Mesh( new THREE.CubeGeometry( 1000, 1000, 1000 ), material );
+				scene.add( mesh );
+
+				// Spheres
+				var geo = new THREE.SphereGeometry( 3, 64, 64 );
+				geo.computeTangents();
+				for ( var i = 0; i < numSpheres; i ++ ) 
+				{
+                    var iuniforms = THREE.UniformsUtils.merge( [
+                        THREE.UniformsLib["lights"], THREE.UniformsLib[ "shadowmap" ], {
+                            roughnessScale: { type: "f", value: 0.7 },
+                            diffuseScale: { type: "f", value: 0.05 },
+                            iorScale: { type: "f", value: 0.05 },
+
+                            "diffuseAmbientCube": { type: "t", value: null },
+
+                            "glossLowReflectionCube": { type: "t", value: null },
+                            "glossMidReflectionCube": { type: "t", value: null },
+                            "glossHighReflectionCube": { type: "t", value: null }
+                        } ]);
+
+                    iuniforms[ "diffuseAmbientCube" ].value = diffuseAmbientCube;
+                    iuniforms[ "glossLowReflectionCube" ].value = glossLowReflectionCube;
+                    iuniforms[ "glossMidReflectionCube" ].value = glossMidReflectionCube;
+                    iuniforms[ "glossHighReflectionCube" ].value = glossHighReflectionCube;
+
+                    var newMat = new THREE.ShaderMaterial({
+                        uniforms: iuniforms,
+                        vertexShader: document.getElementById('vertexShader').textContent,
+                        fragmentShader: document.getElementById('fragmentShader').textContent,
+                        lights: true
+                    });
+
+					var sphereMesh = new THREE.Mesh( geo, newMat );
+					sphereMesh.position.x = Math.random() * 400 - 200;
+					sphereMesh.position.y = Math.random() * 400 - 200;
+					sphereMesh.position.z = Math.random() * 400 - 200;
+                    sphereMesh.scale.x = sphereMesh.scale.y = sphereMesh.scale.z = Math.random() * 3 + 1;
+
+                    if( i == 0 )
+                    {
+                        sphereMesh.position.set( 0, 0, 0 );
+                        sphereMesh.scale.set( 1.25, 1.25, 1.25 );
+                    }
+
+					scene.add( sphereMesh );
+                    sphereMeshes.push( sphereMesh );
+				}
+
+			    pointLight1 = new THREE.PointLight(0xff2222);
+			    pointLight1.scale.set( 0.05, 0.05, 0.05 );
+			    pointLight1.position.set( 0, 0, 0 );
+			    scene.add(pointLight1);
+
+			    pointLight2 = new THREE.PointLight(0xff2222);
+			    pointLight2.scale.set(0.05, 0.05, 0.05);
+			    pointLight2.position.set(0, 0, 0);
+			   	scene.add(pointLight2);
+
+			    var lightSphere = new THREE.SphereGeometry( 2, 16, 8, 3 );
+			    lightMesh = new THREE.Mesh( lightSphere, new THREE.MeshBasicMaterial( { color: 0xffeeee } ) );
+			    lightMesh.scale.set( 0.05, 0.05, 0.05 );
+			    lightMesh.position = pointLight1.position;
+			    scene.add(lightMesh);
+
+			    lightMesh2 = new THREE.Mesh(lightSphere, new THREE.MeshBasicMaterial({ color: 0xffeeee }));
+			    lightMesh2.scale.set(0.05, 0.05, 0.05);
+			    lightMesh2.position = pointLight2.position;
+			    scene.add(lightMesh2);
+
+				renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, precision: "highp" });
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				container.appendChild( renderer.domElement );
+
+                renderer.domElement.style.position = 'absolute';
+                renderer.domElement.style.top = "0px";
+                renderer.domElement.style.left = "0px";
+
+                var gui = new dat.GUI();
+                var guiShading = gui.addFolder('Shading');
+                guiShading.add( settings, 'Roughness', 0, 1 );
+                guiShading.add( settings, 'Diffusion', 0, 1 );
+                guiShading.add( settings, 'RefractiveIndex', 1, 6 );
+                guiShading.open();
+
+				document.addEventListener( 'mousedown', onDocumentMouseDown, false );
+				document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+				document.addEventListener( 'mouseup', onDocumentMouseUp, false );
+				document.addEventListener( 'mousewheel', onDocumentMouseWheel, false );
+				document.addEventListener( 'DOMMouseScroll', onDocumentMouseWheel, false);
+
+				//
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function onDocumentMouseDown( event ) {
+
+				event.preventDefault();
+
+				isUserInteracting = true;
+
+				onPointerDownPointerX = event.clientX;
+				onPointerDownPointerY = event.clientY;
+
+				onPointerDownLon = lon;
+				onPointerDownLat = lat;
+
+			}
+
+			function onDocumentMouseMove( event ) {
+
+				if ( isUserInteracting === true ) {
+
+					lon = ( onPointerDownPointerX - event.clientX ) * 0.1 + onPointerDownLon;
+					lat = ( event.clientY - onPointerDownPointerY ) * 0.1 + onPointerDownLat;
+
+				}
+
+			}
+
+			function onDocumentMouseUp( event ) {
+
+				isUserInteracting = false;
+
+			}
+
+			function onDocumentMouseWheel( event ) {
+
+				// WebKit
+
+				if ( event.wheelDeltaY ) {
+
+					camera.fov -= event.wheelDeltaY * 0.05;
+
+				// Opera / Explorer 9
+
+				} else if ( event.wheelDelta ) {
+
+					camera.fov -= event.wheelDelta * 0.05;
+
+				// Firefox
+
+				} else if ( event.detail ) {
+
+					camera.fov += event.detail * 1.0;
+
+				}
+
+				camera.updateProjectionMatrix();
+
+			}
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				update();
+
+			}
+
+			var r = 6.5;
+			function update() {
+
+				if ( isUserInteracting === false ) {
+
+					lon += 0.1;
+
+				}
+
+                sphereMeshes[0].material.uniforms[ "roughnessScale" ].value = settings.Roughness;
+                sphereMeshes[0].material.uniforms[ "diffuseScale" ].value = settings.Diffusion;
+                sphereMeshes[0].material.uniforms[ "iorScale" ].value = settings.RefractiveIndex;
+
+                var d = 0.0;
+                for ( var i = 1; i < numSpheres; i ++ ) 
+                {
+                    d += 0.1;
+                    sphereMeshes[i].material.uniforms[ "roughnessScale" ].value = Math.max( Math.min( 0.5 + Math.sin( d + r * 1.25) * 0.5, 0.95 ), 0.05 );
+                    sphereMeshes[i].material.uniforms[ "diffuseScale" ].value = Math.max( Math.min( 0.5 + Math.cos( d + r * 1.5) * 0.5, 0.95 ), 0.05 );
+                    sphereMeshes[i].material.uniforms[ "iorScale" ].value = Math.max( Math.min( 2.5 + Math.sin( d + r * 0.325) * 1.0, 3.95 ), 1.0 );
+                } 
+
+				lat = Math.max( - 85, Math.min( 85, lat ) );
+				phi = THREE.Math.degToRad( 90 - lat );
+				theta = THREE.Math.degToRad( lon );
+
+				camera.position.x = 18 * Math.sin( phi ) * Math.cos( theta );
+				camera.position.y = 18 * Math.cos( phi );
+				camera.position.z = 18 * Math.sin( phi ) * Math.sin( theta );
+
+			    pointLight1.position.x = -12 * Math.sin(r);
+			    pointLight1.position.y = -2 * Math.sin(-r) + 4;
+			    pointLight1.position.z = -2 + Math.cos(r) * 25;
+
+			    pointLight2.position.x = 12 * Math.cos(-r);
+			    pointLight2.position.y = 3 * Math.cos(r) - 4;
+			    pointLight2.position.z = -2 + Math.sin(r) * 20;
+
+			    r += 0.01;
+
+				camera.lookAt( new THREE.Vector3( 0.0, 0.0, 0.0 ) );
+
+				/*
+				// distortion
+				camera.position.copy( camera.target ).negate();
+				*/
+
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+	</body>
+</html>

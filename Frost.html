@@ -1,0 +1,231 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Sauhiro Showcase - Geo (Basics)</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+                background: #141414;
+				color:#fff;
+				padding:0;
+				margin:0;
+				overflow:hidden;
+				font-family:georgia;
+				text-align:center;
+			}
+			#info {
+				position: absolute;
+				top: 0px; width: 50%;
+				color: #ffffff;
+				padding: 5px;
+				font-family:Monospace;
+				font-size:13px;
+				text-align:center;
+				z-index:1000;
+			}
+			a { color:skyblue }
+		</style>
+	</head>
+
+	<body>
+        <script src="inc/three.js"></script>
+        <script src="inc/stats.min.js"></script>
+        <script src="inc/TrackballControls.js"></script>
+        <script src="inc/Geo.js"></script>
+        <script src="inc/rStats.js"></script>
+        <script src="inc/rStats.extras.js"></script>
+        <script type="text/javascript" src="inc/dat.gui.min.js"></script>
+        <script src="inc/jquery.min.js"></script> 
+
+		<script>
+			var geo;
+			var container, stats;
+			var camera, scene, renderer, controls;
+			var directionalLight, pointLight1, pointLight2;
+
+			/*var tS;
+			var glS = new glStats(); // init at any point
+			var rS;*/
+
+			var Settings = function() 
+			{
+				this.RoughnessScale = 1.1;
+				this.DiffuseScale = 0.75;
+				this.FogScale = 0.07;
+
+				this.SunIntensity = 4.0;
+				this.AmbientIntensity = 0.625;
+			}
+			var settings = new Settings();
+
+			init();
+			animate();
+			fixedStep();
+
+			function addMeshToScene( geometry, scale, x, y, z, rx, ry, rz, material ) 
+			{
+				mesh = new THREE.Mesh( geometry, material );
+				mesh.scale.set( scale, scale, scale );
+				mesh.position.set( x, y, z );
+				mesh.rotation.set(rx * 0.0174532925, ry * 0.0174532925, rz * 0.0174532925);
+
+				geometry.computeTangents();
+
+				scene.add( mesh );
+			}
+
+			function addObjectToScene( object, scale, x, y, z, rx, ry, rz, material ) 
+			{
+				object.traverse( function ( child ) 
+				{
+					if ( child instanceof THREE.Mesh )
+					{
+						addMeshToScene( child.geometry, scale, x, y, z, rx, ry, rz, material );
+					}
+				} );
+			}
+
+			function init() 
+			{
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+			    camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.5, 30000 );
+				camera.position.set( -2550, -100, -2550 );
+
+		        renderer = new THREE.WebGLRenderer({ antialias: true, precision: "highp" });
+		        renderer.gammaInput = false;
+		        renderer.gammaOutput = true;
+		        renderer.setSize( window.innerWidth, window.innerHeight );
+
+		        container.appendChild( renderer.domElement );
+
+			    scene = new THREE.Scene();
+
+			    // Lighting
+
+			    directionalLight = new THREE.DirectionalLight( 0xfffefc, 4.25 );
+			    directionalLight.position.set( 1600, 12500, 1200 );
+			    directionalLight.castShadow = false;
+
+			    scene.add(directionalLight);
+
+			   	// Controls
+
+				controls = new THREE.TrackballControls( camera, renderer.domElement );
+
+				controls.rotateSpeed = 1.0;
+				controls.zoomSpeed = 1.2;
+				controls.panSpeed = 0.8;
+
+				controls.noZoom = false;
+				controls.noPan = false;
+
+				controls.staticMoving = false;
+				controls.dynamicDampingFactor = 0.1;
+				controls.keys = [ 65, 83, 68 ];
+				controls.minDistance = 100;
+
+			   /*tS = new threeStats( renderer );
+			    rS = new rStats( {
+			    values: {
+			        frame: { caption: 'Total frame time (ms)', over: 16 },
+			        raf: { caption: 'Time since last rAF (ms)' },
+			        fps: { caption: 'Framerate (FPS)', below: 30 },
+			        calls: { caption: 'Calls (three.js)', over: 3000 },
+			        action1: { caption: 'Render action #1 (ms)' },
+			        render: { caption: 'WebGL Render (ms)' }
+			    },
+			    groups: [
+			        { caption: 'Framerate', values: [ 'fps', 'raf' ] },
+			        { caption: 'Frame Budget', values: [ 'frame' ] }
+			    ],
+			    plugins: [
+			        tS,
+			        glS
+			    ]
+			} );*/
+
+				renderer.domElement.style.position = 'absolute';
+				renderer.domElement.style.top = "0px";
+				renderer.domElement.style.left = "0px";
+
+				// Geo
+
+                geo = new THREE.Geo( "data/Frost/Frost_17/", scene, 1 );
+
+                // GUI
+
+				var gui = new dat.GUI();
+				var guiShading = gui.addFolder('Shading');
+				guiShading.add( settings, 'RoughnessScale', 0, 2 );
+				guiShading.add( settings, 'DiffuseScale', 0, 1 );
+				guiShading.add( settings, 'FogScale', 0, 2 );
+				guiShading.open();
+
+				var guiLighting = gui.addFolder('Lighting');
+				guiLighting.add( settings, 'SunIntensity', 0, 7 );
+				guiLighting.add( settings, 'AmbientIntensity', 0, 1.5 );
+				guiLighting.open();
+
+				window.addEventListener( 'resize', onWindowResize, false );
+				container.addEventListener( 'mousedown', onMouseDown, false );
+			}
+
+			function onMouseDown( event ) 
+			{
+				event.preventDefault();
+			}
+
+			function onWindowResize() 
+			{
+				windowHalfX = window.innerWidth / 2;
+				windowHalfY = window.innerHeight / 2;
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+			}
+
+			function animate() 
+			{
+				/*rS( 'frame' ).start();
+				 glS.start();
+				rS( 'rAF' ).tick();
+				rS( 'FPS' ).frame();*/
+
+			    requestAnimationFrame( animate );
+			    render();
+
+				//rS( 'frame' ).end();
+			    //rS().update();
+			}
+
+			var r = 6.5;
+
+			function render()
+			{
+			    controls.update();
+				renderer.render( scene, camera );
+			}
+
+			function fixedStep()
+			{
+			    directionalLight.position.x = 0 + Math.cos( r * 0.25 ) * 250;
+			    directionalLight.position.y = 500 + Math.sin( r * 0.176 ) * 125;
+			    directionalLight.position.z = 500 + Math.sin(-r * 0.5 ) * 250; 
+			    directionalLight.intensity = settings.SunIntensity;
+
+			    geo.tileArray[0].uniforms[ "roughnessScale" ].value = settings.RoughnessScale;
+			   	geo.tileArray[0].uniforms[ "diffuseScale" ].value = settings.DiffuseScale;
+			    geo.tileArray[0].uniforms[ "fogScale" ].value = settings.FogScale;
+			    geo.tileArray[0].uniforms[ "ambientScale" ].value = settings.AmbientIntensity;
+			    r += 0.01666666666;
+
+			    setTimeout( fixedStep, 16.666666666 );
+			}
+		</script>
+	</body>
+</html>

@@ -16,11 +16,12 @@ THREE.OZMLObject = function ()
 	this.Source = "";
 }
 
-THREE.OZMLMaterial = function( material, buffer )
+THREE.OZMLMaterial = function( material )
 {
     this.Material = material;
-    this.GeometryBuffer = buffer;
-    this.CurrentLength = 0;
+    this.GeometryBuffers = [];
+    this.CurrentLengths = [];
+    this.Meshes = [];
 }
 
 THREE.MeshAssemblage = function( inUrl ) 
@@ -34,8 +35,7 @@ THREE.MeshAssemblage = function( inUrl )
 
     this.Loaded = function( mesh )
     {
-       var index;
-       for (index = 0; index < _this.ObjectStack.length; index++)
+       for (var index = 0; index < _this.ObjectStack.length; index++)
        {
            var m2 = mesh.clone();
            _this.ObjectStack[index](m2);
@@ -43,7 +43,7 @@ THREE.MeshAssemblage = function( inUrl )
     }
 
     this.url = inUrl;
-    this.ObjectStack = new Array();
+    this.ObjectStack = [];
     this.loading = false;
 }
 
@@ -106,25 +106,9 @@ THREE.OZMLParser = function ( inUrl, inScene, inMaterial )
 		newMaterial.transparent = true;
 
 	    // Buffer
-		var bufferGeometry = new THREE.BufferGeometry();
-		bufferGeometry.attributes =
-        {
-            position: {
-                itemSize: 3,
-                array: new Float32Array(218450 * 3 * 3)
-            },
-            normal: {
-                itemSize: 3,
-                array: new Float32Array(218450 * 3 * 3)
-            },
-            uv: {
-                itemSize: 2,
-                array: new Float32Array(218450 * 3 * 2)
-            }
-        }
-		bufferGeometry.dynamic = true;
+		//bufferGeometry.dynamic = true;
 
-		_this.materialLibrary[attributes.name.value] = new THREE.OZMLMaterial(newMaterial, bufferGeometry);
+		_this.materialLibrary[attributes.name.value] = new THREE.OZMLMaterial(newMaterial);
 		console.log( "Reading material: " + attributes.name.value );
 	}
 
@@ -215,7 +199,7 @@ THREE.OZMLParser = function ( inUrl, inScene, inMaterial )
 		            {
 		                object.traverse(function (child) {
 		                    if (child instanceof THREE.Mesh)
-		                    _this.meshLibrary[attributes.mesh.value].Loaded( child.geometry );
+		                    	_this.meshLibrary[attributes.mesh.value].Loaded( child.geometry );
 		                } );
 		            });
 
@@ -224,23 +208,93 @@ THREE.OZMLParser = function ( inUrl, inScene, inMaterial )
 
 		        _this.meshLibrary[attributes.mesh.value].PushCallback( function (object)
 		        {
-		            threeObject.add(new THREE.Mesh(object, material));
-
-		            /*var bufferGeometry = _this.materialLibrary[obj.Material].GeometryBuffer;
-
-		            var mesh = new THREE.Mesh(bufferGeometry, material);
-		            if (_this.materialLibrary[obj.Material].CurrentLength == 0) _this.scene.add(mesh);
-
 		            object.applyMatrix(new THREE.Matrix4().makeScale(threeObject.scale.x, threeObject.scale.y, threeObject.scale.z));
 		            object.applyMatrix(new THREE.Matrix4().makeRotationX(threeObject.rotation.x));
 		            object.applyMatrix(new THREE.Matrix4().makeRotationY(threeObject.rotation.y));
 		            object.applyMatrix(new THREE.Matrix4().makeRotationZ(threeObject.rotation.z));
 		            object.applyMatrix(new THREE.Matrix4().makeTranslation(threeObject.position.x, threeObject.position.y, threeObject.position.z));
-
 		            object.verticesNeedUpdate = true;
 
-		            bufferGeometry = THREE.BufferGeometryUtils.fromGeometry(bufferGeometry, _this.materialLibrary[obj.Material].CurrentLength, object);
-		            _this.materialLibrary[obj.Material].CurrentLength += object.faces.length;*/
+		            // Append to buffer
+		            
+		            var materialStore =  _this.materialLibrary[obj.Material];
+
+		        	var currentBuffer = materialStore.GeometryBuffers.length - 1;
+		            var currentOffset = ( currentBuffer > -1 ) ? materialStore.CurrentLengths[currentBuffer] : 0;
+		            var firstAppend = false;
+
+		            //console.log( currentOffset + object.faces.length);
+		            var bufferSize = 5000;//21845;
+		            if( currentOffset + object.faces.length > bufferSize || currentBuffer == -1 )
+		            {
+		            	if( currentBuffer > -1 )
+		            		console.log( "Splitting buffer #" + currentBuffer + " at: " + currentOffset );
+
+		            	currentBuffer++;
+		            	currentOffset = 0;
+
+						var bufferGeometryNew = new THREE.BufferGeometry();
+						bufferGeometryNew.attributes =
+				        {
+							/*index: {
+								itemSize: 1,
+								array: new Uint16Array( bufferSize * 3 ),
+								numItems: bufferSize * 3
+							},*/
+				            position: {
+				                itemSize: 3,
+				                array: new Float32Array(bufferSize * 3 * 3),
+				                numItems: bufferSize * 3 * 3
+				            },
+				            normal: {
+				                itemSize: 3,
+				                array: new Float32Array(bufferSize * 3 * 3),
+				                numItems: bufferSize * 3 * 3
+				            },
+				            uv: {
+				                itemSize: 2,
+				                array: new Float32Array(bufferSize * 3 * 2),
+				                numItems: bufferSize * 3 * 2
+				            }
+				        }
+				        bufferGeometryNew.dynamic = true;
+
+						/*var chunkSize = 2000;
+						var indices = bufferGeometryNew.attributes.index.array;
+						for ( var i = 0; i < indices.length; i ++ )
+								indices[ i ] = i % ( 3 * chunkSize );
+
+						bufferGeometryNew.offsets = [];
+						var offsets = bufferSize / chunkSize;
+						for ( var i = 0; i < offsets; i ++ ) 
+						{
+							var bufferOffset = {
+								start: ( i * chunkSize  * 3 ),
+								index: ( i * chunkSize  * 3 ),
+								count: Math.min( bufferSize - ( i * chunkSize ), chunkSize ) * 3
+							};
+
+							bufferGeometryNew.offsets.push( bufferOffset );
+						}*/
+
+		            	materialStore.CurrentLengths.push( 0 );
+		            	materialStore.GeometryBuffers.push( bufferGeometryNew );
+
+		            	firstAppend = true;
+		            }
+
+		            var bufferGeometry = materialStore.GeometryBuffers[currentBuffer];
+		            bufferGeometry = THREE.BufferGeometryUtils.fromGeometry(bufferGeometry, currentOffset, object);
+		            materialStore.CurrentLengths[currentBuffer] += object.faces.length;
+
+		            if (firstAppend)
+	            	{
+	            		materialStore.Meshes.push( new THREE.Mesh(bufferGeometry, material) );
+	             		_this.scene.add(materialStore.Meshes[currentBuffer]);
+	             	}
+
+	             	materialStore.Meshes[currentBuffer].geometry.verticesNeedUpdate = true;
+
 		            // console.log(_this.materialLibrary[obj.Material].CurrentLength);
 		        });
 		    }

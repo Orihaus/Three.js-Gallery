@@ -19,22 +19,26 @@ THREE.BufferGeometryUtils = {
 		var hasFaceVertexUv = faceVertexUvs[ 0 ].length > 0;
 		var hasFaceVertexNormals = faces[ 0 ].vertexNormals.length == 3;
 
-		//var bufferGeometry = new THREE.BufferGeometry();
-
 		var positions = bufferGeometry.attributes.position.array;
 		var normals = bufferGeometry.attributes.normal.array;
 		var uvs = bufferGeometry.attributes.uv.array;
 
-		var i2 = offset * 6, i3 = offset * 9;
+		var i1 = offset * 3, i2 = offset * 6, i3 = offset * 9;
 
-		for (var i = 0; i < faces.length; i++) {
-
+		for (var i = 0; i < faces.length; i++) 
+		{
 			var face = faces[ i ];
 
 			var a = vertices[ face.a ];
 			var b = vertices[ face.b ];
 			var c = vertices[ face.c ];
 
+			//
+			//indices[i1    ] = ( i1 + 0 ) % ( 3 * chunkSize );
+			//indices[i1 + 1] = ( i1 + 1 ) % ( 3 * chunkSize );
+			//indices[i1 + 2] = ( i1 + 2 ) % ( 3 * chunkSize );
+
+			//
 			positions[ i3     ] = a.x;
 			positions[ i3 + 1 ] = a.y;
 			positions[ i3 + 2 ] = a.z;
@@ -100,6 +104,7 @@ THREE.BufferGeometryUtils = {
 
 			}
 
+			i1 += 3;
 			i3 += 9;
 			i2 += 6;
 
